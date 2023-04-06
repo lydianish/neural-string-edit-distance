@@ -15,7 +15,7 @@ import time
 import numpy as np
 import torch
 from torch import nn, optim
-from torchtext import data
+from torchtext.legacy import data
 
 from experiment import experiment_logging, get_timestamp, save_vocab
 from models import EditDistNeuralModelConcurrent

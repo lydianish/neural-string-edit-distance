@@ -13,7 +13,7 @@ import os
 
 import torch
 from torch import optim
-from torchtext import data
+from torchtext.legacy import data
 from transformers import BertModel, BertConfig
 
 from experiment import experiment_logging, get_timestamp, save_vocab

@@ -11,7 +11,8 @@ from torch.functional import F
 from torch import Tensor
 
 from transformers import BertConfig, BertModel
-from transformers.modeling_bert import BertSelfAttention
+from transformers.models.bert.modeling_bert import BertSelfAttention
+from transformers import BartModel
 
 from rnn import RNNEncoder, RNNDecoder
 from cnn import CNNEncoder, CNNDecoder
@@ -148,6 +149,9 @@ class NeuralEditDistBase(EditDistBase):
         self.window = window
         if self.model_type == "bert":
             self.hidden_dim = 768
+        elif self.model_type == "bart":
+            self.hidden_dim = 1024
+            self.directed = True
         self.hidden_layers = hidden_layers
         self.attention_heads = attention_heads
         self.src_encoder = self._encoder_for_vocab(src_vocab)
@@ -170,7 +174,8 @@ class NeuralEditDistBase(EditDistBase):
 
         if self.directed:
             self.attention = BertSelfAttention(AttConfig(
-                self.hidden_dim, 4, True, 0.1))
+                    self.hidden_dim, 4, True, 0.1))
+
 
         self.deletion_logit_proj = nn.Linear(
             proj_source, self.deletion_classes)
@@ -189,6 +194,8 @@ class NeuralEditDistBase(EditDistBase):
             return self._rnn_for_vocab(vocab, directed)
         if self.model_type == "bert":
             return BertModel.from_pretrained("bert-base-cased")
+        if self.model_type == "bart":
+            return BartModel.from_pretrained("facebook/bart-base")
         if self.model_type == "embeddings":
             return self._cnn_for_vocab(vocab, directed, hidden=False)
         if self.model_type == "cnn":

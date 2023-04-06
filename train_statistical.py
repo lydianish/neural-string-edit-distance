@@ -5,7 +5,7 @@ import logging
 import os
 
 import torch
-from torchtext import data
+from torchtext.legacy import data
 
 from experiment import experiment_logging, get_timestamp, save_vocab
 from statistical_model import EditDistStatModel

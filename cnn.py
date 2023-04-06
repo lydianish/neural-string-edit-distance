@@ -3,7 +3,7 @@
 import torch
 from torch import nn
 from torch.functional import F
-from transformers.modeling_bert import BertSelfAttention
+from transformers.models.bert.modeling_bert import BertSelfAttention
 
 from rnn import AttConfig
 

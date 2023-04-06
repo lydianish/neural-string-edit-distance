@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from torch import optim
 from torch.functional import F
-from torchtext import data
+from torchtext.legacy import data
 from transformers import (
     BertForSequenceClassification, BertConfig)
 

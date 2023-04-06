@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 import editdistance
-from torchtext import data
+from torchtext.legacy import data
 
 
 def load_vocab(file):
