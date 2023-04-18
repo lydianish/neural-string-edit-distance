@@ -10,9 +10,9 @@ from torch import nn
 from torch.functional import F
 from torch import Tensor
 
-from transformers import BertConfig, BertModel
+from transformers import BertConfig, BertModel, BartConfig, BartModel
 from transformers.models.bert.modeling_bert import BertSelfAttention
-from transformers import BartModel
+from transformers.models.bart.modeling_bart import BartAttention
 
 from rnn import RNNEncoder, RNNDecoder
 from cnn import CNNEncoder, CNNDecoder
@@ -20,10 +20,13 @@ from cnn import CNNEncoder, CNNDecoder
 MINF = torch.log(torch.tensor(0.))
 
 
-AttConfig = namedtuple(
-    "AttConfig",
+BertAttConfig = namedtuple(
+    "BertAttConfig",
     ["hidden_size", "num_attention_heads", "output_attentions",
      "attention_probs_dropout_prob"])
+BartAttConfig = namedtuple(
+    "BartAttConfig",
+    ["embed_dim", "num_heads", "dropout", "is_decoder"])
 
 
 class EditDistBase(nn.Module):
@@ -173,8 +176,11 @@ class NeuralEditDistBase(EditDistBase):
         proj_source = 4 * self.hidden_dim if self.directed else self.hidden_dim
 
         if self.directed:
-            self.attention = BertSelfAttention(AttConfig(
-                    self.hidden_dim, 4, True, 0.1))
+            if self.model_type == "bart":
+                self.attention = BartAttention(1024, 16, 0.1, True)
+            else:
+                self.attention = BertSelfAttention(BertAttConfig(
+                        self.hidden_dim, 4, True, 0.1))
 
 
         self.deletion_logit_proj = nn.Linear(
@@ -195,6 +201,7 @@ class NeuralEditDistBase(EditDistBase):
         if self.model_type == "bert":
             return BertModel.from_pretrained("bert-base-cased")
         if self.model_type == "bart":
+            #return BartModel(BartConfig(is_encoder_decoder=False)).from_pretrained("facebook/bart-base")
             return BartModel.from_pretrained("facebook/bart-base")
         if self.model_type == "embeddings":
             return self._cnn_for_vocab(vocab, directed, hidden=False)
