@@ -19,6 +19,7 @@ from cnn import CNNEncoder, CNNDecoder
 
 MINF = torch.log(torch.tensor(0.))
 
+import pdb
 
 BertAttConfig = namedtuple(
     "BertAttConfig",
@@ -153,7 +154,7 @@ class NeuralEditDistBase(EditDistBase):
         if self.model_type == "bert":
             self.hidden_dim = 768
         elif self.model_type == "bart":
-            self.hidden_dim = 1024
+            self.hidden_dim = 768
             self.directed = True
         self.hidden_layers = hidden_layers
         self.attention_heads = attention_heads
@@ -177,7 +178,7 @@ class NeuralEditDistBase(EditDistBase):
 
         if self.directed:
             if self.model_type == "bart":
-                self.attention = BartAttention(1024, 16, 0.1, True)
+                self.attention = BartAttention(self.hidden_dim, 4, 0.1, True)
             else:
                 self.attention = BertSelfAttention(BertAttConfig(
                         self.hidden_dim, 4, True, 0.1))
@@ -293,11 +294,18 @@ class NeuralEditDistBase(EditDistBase):
             tgt_vectors.unsqueeze(1).repeat(1, src_len, 1, 1)), dim=3))
 
         if self.directed:
-            unsq_enc_att_mask = (
-                src_mask.unsqueeze(1).unsqueeze(1))
-            att_output = self.attention(
-                tgt_vectors, encoder_hidden_states=src_vectors,
-                encoder_attention_mask=unsq_enc_att_mask)[0]
+            if self.model_type =="bart":
+                unsq_enc_att_mask = (
+                    src_mask.unsqueeze(1).unsqueeze(1).repeat(1, 1, tgt_len, 1))
+                att_output = self.attention(
+                    hidden_states=tgt_vectors, key_value_states=src_vectors,
+                    attention_mask=unsq_enc_att_mask)[0]
+            else:
+                unsq_enc_att_mask = (
+                    src_mask.unsqueeze(1).unsqueeze(1))
+                att_output = self.attention(
+                    tgt_vectors, encoder_hidden_states=src_vectors,
+                    encoder_attention_mask=unsq_enc_att_mask)[0]
 
             feature_table = torch.cat(
                 (feature_table,
@@ -305,21 +313,21 @@ class NeuralEditDistBase(EditDistBase):
                  tgt_vectors.unsqueeze(1).repeat(1, src_len, 1, 1),
                  att_output.unsqueeze(1).repeat(1, src_len, 1, 1)),
                 dim=3)
-
+        
         # DELETION <<<
         valid_deletion_logits = self.deletion_logit_proj(feature_table[:, :-1])
         deletion_padding = torch.full_like(valid_deletion_logits[:, :1], MINF)
         padded_deletion_logits = torch.cat(
-            (deletion_padding, valid_deletion_logits), dim=1)
+            (deletion_padding, valid_deletion_logits), dim=1).to(self.device)
 
         # INSERTIONS <<<
         valid_insertion_logits = self.insertion_proj(feature_table[:, :, :-1])
         insertion_padding = torch.full((
             valid_insertion_logits.size(0),
             valid_insertion_logits.size(1), 1,
-            valid_insertion_logits.size(3)), MINF).to(self.device)
+            valid_insertion_logits.size(3)), MINF)
         padded_insertion_logits = torch.cat(
-            (insertion_padding, valid_insertion_logits), dim=2)
+            (insertion_padding, valid_insertion_logits), dim=2).to(self.device)
 
         # SUBSITUTION <<<
         valid_subs_logits = self.substitution_proj(feature_table[:, :-1, :-1])
@@ -329,16 +337,16 @@ class NeuralEditDistBase(EditDistBase):
         tgt_subs_padding = torch.full((
             src_padded_subs_logits.size(0),
             src_padded_subs_logits.size(1), 1,
-            src_padded_subs_logits.size(3)), MINF).to(self.device)
+            src_padded_subs_logits.size(3)), MINF)
         padded_subs_logits = torch.cat(
-            (tgt_subs_padding, src_padded_subs_logits), dim=2)
+            (tgt_subs_padding, src_padded_subs_logits), dim=2).to(self.device)
 
         actions_to_concat = [
             padded_deletion_logits, padded_insertion_logits,
             padded_subs_logits]
 
         if self.extra_classes > 0:
-            extra_logits = self.extra_proj(feature_table)
+            extra_logits = self.extra_proj(feature_table).to(self.device)
             actions_to_concat.append(extra_logits)
 
         action_scores = F.log_softmax(torch.cat(
@@ -390,8 +398,8 @@ class NeuralEditDistBase(EditDistBase):
         "target" in the EM loss.
         """
 
-        src_lengths = (src_sent != self.src_pad).sum(1)
-        tgt_lengths = (tgt_sent != self.tgt_pad).sum(1)
+        src_lengths = (src_sent != self.src_pad).sum(1).to(alpha.device)
+        tgt_lengths = (tgt_sent != self.tgt_pad).sum(1).to(alpha.device)
 
         return _torchscript_backward_evaluation(
             src_len, tgt_len,
@@ -535,6 +543,7 @@ class EditDistNeuralModelConcurrent(NeuralEditDistBase):
 
     @torch.no_grad()
     def probabilities(self, src_sent, tgt_sent):
+        pdb.set_trace()
         batch_size = src_sent.size(0)
         b_range = torch.arange(batch_size)
         src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
