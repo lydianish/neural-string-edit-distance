@@ -138,3 +138,5 @@ gpu-env/
 unused/
 alignment/eflomal
 alignment/fast_align
+
+tmp/
