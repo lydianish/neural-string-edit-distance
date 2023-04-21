@@ -408,7 +408,7 @@ def main():
         if data_args.max_eval_samples is not None:
             eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
 
-    if training_args.do_predict or data_args.task_name is not None or data_args.test_file is not None:
+    if training_args.do_predict or data_args.test_file is not None:
         if "test" not in raw_datasets:
             raise ValueError("--do_predict requires a test dataset")
         predict_dataset = raw_datasets["test"]
