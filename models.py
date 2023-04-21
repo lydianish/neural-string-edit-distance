@@ -517,8 +517,8 @@ class EditDistNeuralModelConcurrent(NeuralEditDistBase):
     def forward(self, src_sent, tgt_sent):
         batch_size = src_sent.size(0)
         b_range = torch.arange(batch_size)
-        src_lengths = (src_sent != self.src_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
-        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
+        src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
+        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - 1
         src_len, tgt_len, _, action_scores, _, _ = self._action_scores(
             src_sent, tgt_sent)
 
@@ -544,8 +544,8 @@ class EditDistNeuralModelConcurrent(NeuralEditDistBase):
     def probabilities(self, src_sent, tgt_sent):
         batch_size = src_sent.size(0)
         b_range = torch.arange(batch_size)
-        src_lengths = (src_sent != self.src_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
-        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
+        src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
+        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - 1
         _, _, _, action_scores, _, _ = (
             self._action_scores(src_sent, tgt_sent))
 
@@ -575,8 +575,8 @@ class EditDistNeuralModelProgressive(NeuralEditDistBase):
 
     def forward(self, src_sent, tgt_sent):
         b_range = torch.arange(src_sent.size(0))
-        src_lengths = (src_sent != self.src_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
-        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
+        src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
+        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - 1
         (src_len, tgt_len, _, action_scores,
             insertion_logits, subs_logits) = self._action_scores(
                 src_sent, tgt_sent)
