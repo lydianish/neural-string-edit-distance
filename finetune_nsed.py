@@ -281,24 +281,15 @@ def main():
     # https://huggingface.co/docs/datasets/loading_datasets.html.
 
     # Labels
-    if data_args.task_name is not None:
-        is_regression = data_args.task_name == "string-pair-matching"
-        if not is_regression:
-            label_list = raw_datasets["train"].features["label"].names
-            num_labels = len(label_list)
-        else:
-            num_labels = 1
+    is_regression = data_args.task_name == "string-similarity"
+    if is_regression:
+        num_labels = 1
     else:
-        # Trying to have good defaults here, don't hesitate to tweak to your needs.
-        is_regression = raw_datasets["train"].features["label"].dtype in ["float32", "float64"]
-        if is_regression:
-            num_labels = 1
-        else:
-            # A useful fast method:
-            # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.unique
-            label_list = raw_datasets["train"].unique("label")
-            label_list.sort()  # Let's sort it for determinism
-            num_labels = len(label_list)
+        # A useful fast method:
+        # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.unique
+        label_list = raw_datasets["train"].unique("label")
+        label_list.sort()  # Let's sort it for determinism
+        num_labels = len(label_list)
 
     # Load pretrained model and tokenizer
     #
@@ -514,7 +505,8 @@ def main():
 
         for predict_dataset, task in zip(predict_datasets, tasks):
             # Removing the `label` columns because it contains -1 and Trainer won't like that.
-            predict_dataset = predict_dataset.remove_columns("label")
+            #predict_dataset = predict_dataset.remove_columns("label")
+            pdb.set_trace()
             predictions = trainer.predict(predict_dataset, metric_key_prefix="predict").predictions
             predictions = np.squeeze(predictions) if is_regression else np.argmax(predictions, axis=1)
 
