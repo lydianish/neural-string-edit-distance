@@ -202,8 +202,7 @@ class NeuralEditDistBase(EditDistBase):
         if self.model_type == "bert":
             return BertModel.from_pretrained("bert-base-cased")
         if self.model_type == "bart":
-            #return BartModel(BartConfig(is_encoder_decoder=False)).from_pretrained("facebook/bart-base")
-            return BartModel.from_pretrained("facebook/bart-base")
+            return BartModel.from_pretrained("facebook/bart-base", forced_bos_token_id=0)
         if self.model_type == "embeddings":
             return self._cnn_for_vocab(vocab, directed, hidden=False)
         if self.model_type == "cnn":
@@ -518,8 +517,8 @@ class EditDistNeuralModelConcurrent(NeuralEditDistBase):
     def forward(self, src_sent, tgt_sent):
         batch_size = src_sent.size(0)
         b_range = torch.arange(batch_size)
-        src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
-        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - 1
+        src_lengths = (src_sent != self.src_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
+        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
         src_len, tgt_len, _, action_scores, _, _ = self._action_scores(
             src_sent, tgt_sent)
 
@@ -543,17 +542,16 @@ class EditDistNeuralModelConcurrent(NeuralEditDistBase):
 
     @torch.no_grad()
     def probabilities(self, src_sent, tgt_sent):
-        pdb.set_trace()
         batch_size = src_sent.size(0)
         b_range = torch.arange(batch_size)
-        src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
-        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - 1
+        src_lengths = (src_sent != self.src_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
+        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
         _, _, _, action_scores, _, _ = (
             self._action_scores(src_sent, tgt_sent))
 
         alpha = self._forward_evaluation(src_sent, tgt_sent, action_scores)
 
-        max_lens = torch.max(src_lengths, tgt_lengths).float()
+        max_lens = torch.max(src_lengths, tgt_lengths).float().to(self.device)
         log_probs = alpha[b_range.to(self.device), src_lengths, tgt_lengths]
 
         return log_probs.exp(), (log_probs / max_lens).exp()
@@ -577,8 +575,8 @@ class EditDistNeuralModelProgressive(NeuralEditDistBase):
 
     def forward(self, src_sent, tgt_sent):
         b_range = torch.arange(src_sent.size(0))
-        src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
-        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - 1
+        src_lengths = (src_sent != self.src_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
+        tgt_lengths = (tgt_sent != self.tgt_pad).int().sum(1) - (2 if self.model_type=="bart" else 1)
         (src_len, tgt_len, _, action_scores,
             insertion_logits, subs_logits) = self._action_scores(
                 src_sent, tgt_sent)
