@@ -456,7 +456,7 @@ def main():
         compute_metrics=compute_metrics,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        callbacks = [EarlyStoppingCallback(early_stopping_patience=3)]
+        callbacks=[ EarlyStoppingCallback(early_stopping_patience=10) ] if training_args.load_best_model_at_end and training_args.evaluation_strategy=="steps" else []
     )
 
     # Training
