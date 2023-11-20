@@ -10,24 +10,20 @@ from torch import nn
 from torch.functional import F
 from torch import Tensor
 
-from transformers import BertConfig, BertModel, BartConfig, BartModel
+from transformers import BertConfig, BertModel, BartEncoder, PretrainedConfig
 from transformers.models.bert.modeling_bert import BertSelfAttention
 from transformers.models.bart.modeling_bart import BartAttention
+from transformers.utils import ModelOutput
 
 from rnn import RNNEncoder, RNNDecoder
 from cnn import CNNEncoder, CNNDecoder
 
 MINF = torch.log(torch.tensor(0.))
 
-import pdb
-
 BertAttConfig = namedtuple(
     "BertAttConfig",
     ["hidden_size", "num_attention_heads", "output_attentions",
      "attention_probs_dropout_prob"])
-BartAttConfig = namedtuple(
-    "BartAttConfig",
-    ["embed_dim", "num_heads", "dropout", "is_decoder"])
 
 
 class EditDistBase(nn.Module):
@@ -123,7 +119,7 @@ def get_distortion_mask(max_size=512):
 class NeuralEditDistBase(EditDistBase):
     """Base class for neural models.
 
-    Implements the forward and bakward probability computation, the EM loss
+    Implements the forward and backward probability computation, the EM loss
     function and Viterbi decoding.
     """
     def __init__(self, src_vocab, tgt_vocab, device, directed=False,
@@ -151,11 +147,8 @@ class NeuralEditDistBase(EditDistBase):
         self.directed = directed
         self.hidden_dim = hidden_dim
         self.window = window
-        if self.model_type == "bert":
+        if model_type == "bert" or model_type == "bart":
             self.hidden_dim = 768
-        elif self.model_type == "bart":
-            self.hidden_dim = 768
-            self.directed = True
         self.hidden_layers = hidden_layers
         self.attention_heads = attention_heads
         self.src_encoder = self._encoder_for_vocab(src_vocab)
@@ -194,6 +187,8 @@ class NeuralEditDistBase(EditDistBase):
 
         self.distortion_mask = get_distortion_mask().to(device)
 
+        self.config = PretrainedConfig()
+
     def _encoder_for_vocab(self, vocab, directed=False):
         if self.model_type == "transformer":
             return self._transformer_for_vocab(vocab, directed)
@@ -202,7 +197,7 @@ class NeuralEditDistBase(EditDistBase):
         if self.model_type == "bert":
             return BertModel.from_pretrained("bert-base-cased")
         if self.model_type == "bart":
-            return BartModel.from_pretrained("facebook/bart-base", forced_bos_token_id=0)
+            return BartEncoder.from_pretrained("facebook/bart-base", forced_bos_token_id=0)
         if self.model_type == "embeddings":
             return self._cnn_for_vocab(vocab, directed, hidden=False)
         if self.model_type == "cnn":
@@ -312,21 +307,21 @@ class NeuralEditDistBase(EditDistBase):
                  tgt_vectors.unsqueeze(1).repeat(1, src_len, 1, 1),
                  att_output.unsqueeze(1).repeat(1, src_len, 1, 1)),
                 dim=3)
-        
+
         # DELETION <<<
         valid_deletion_logits = self.deletion_logit_proj(feature_table[:, :-1])
         deletion_padding = torch.full_like(valid_deletion_logits[:, :1], MINF)
         padded_deletion_logits = torch.cat(
-            (deletion_padding, valid_deletion_logits), dim=1).to(self.device)
+            (deletion_padding, valid_deletion_logits), dim=1)
 
         # INSERTIONS <<<
         valid_insertion_logits = self.insertion_proj(feature_table[:, :, :-1])
         insertion_padding = torch.full((
             valid_insertion_logits.size(0),
             valid_insertion_logits.size(1), 1,
-            valid_insertion_logits.size(3)), MINF)
+            valid_insertion_logits.size(3)), MINF).to(self.device)
         padded_insertion_logits = torch.cat(
-            (insertion_padding, valid_insertion_logits), dim=2).to(self.device)
+            (insertion_padding, valid_insertion_logits), dim=2)
 
         # SUBSITUTION <<<
         valid_subs_logits = self.substitution_proj(feature_table[:, :-1, :-1])
@@ -336,16 +331,16 @@ class NeuralEditDistBase(EditDistBase):
         tgt_subs_padding = torch.full((
             src_padded_subs_logits.size(0),
             src_padded_subs_logits.size(1), 1,
-            src_padded_subs_logits.size(3)), MINF)
+            src_padded_subs_logits.size(3)), MINF).to(self.device)
         padded_subs_logits = torch.cat(
-            (tgt_subs_padding, src_padded_subs_logits), dim=2).to(self.device)
+            (tgt_subs_padding, src_padded_subs_logits), dim=2)
 
         actions_to_concat = [
             padded_deletion_logits, padded_insertion_logits,
             padded_subs_logits]
 
         if self.extra_classes > 0:
-            extra_logits = self.extra_proj(feature_table).to(self.device)
+            extra_logits = self.extra_proj(feature_table)
             actions_to_concat.append(extra_logits)
 
         action_scores = F.log_softmax(torch.cat(
@@ -498,7 +493,7 @@ class NeuralEditDistBase(EditDistBase):
 
 
 class EditDistNeuralModelConcurrent(NeuralEditDistBase):
-    """Model for binary sequence-pari classification."""
+    """Model for binary sequence-pair classification."""
     def __init__(self, src_vocab, tgt_vocab, device, directed=False,
                  hidden_dim=32, hidden_layers=2, attention_heads=4,
                  share_encoders=False,
@@ -514,7 +509,7 @@ class EditDistNeuralModelConcurrent(NeuralEditDistBase):
             start_symbol=start_symbol, end_symbol=end_symbol,
             pad_symbol=pad_symbol, model_type=model_type)
 
-    def forward(self, src_sent, tgt_sent):
+    def forward(self, src_sent, tgt_sent, labels=None):
         batch_size = src_sent.size(0)
         b_range = torch.arange(batch_size)
         src_lengths = (src_sent != self.src_pad).int().sum(1) - 1
@@ -556,6 +551,16 @@ class EditDistNeuralModelConcurrent(NeuralEditDistBase):
 
         return log_probs.exp(), (log_probs / max_lens).exp()
 
+class BartEditDistNeuralModelConcurrent(EditDistNeuralModelConcurrent):
+    """Model for binary sequence-pair classification based on BART backbone."""
+    def __init__(self, vocab, device,
+                 hidden_dim=768, hidden_layers=2):
+        super().__init__(
+            vocab, vocab, device, directed=False,
+            hidden_dim=hidden_dim, hidden_layers=hidden_layers, attention_heads=4,
+            share_encoders=True,
+            model_type="bart",
+            start_symbol="<s>", end_symbol="</s>", pad_symbol="<pad>")
 
 class EditDistNeuralModelProgressive(NeuralEditDistBase):
     """Model for sequence generation."""

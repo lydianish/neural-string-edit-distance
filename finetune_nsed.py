@@ -16,7 +16,6 @@
 """ Finetuning the library models for sequence classification on GLUE."""
 # You can also adapt this script on your own text classification task. Pointers for this are left as comments.
 
-import pdb
 import logging
 import os
 import random
@@ -47,7 +46,9 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
-
+import torch
+from torch import nn, optim
+from models import BartEditDistNeuralModelConcurrent
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.18.0.dev0")
@@ -75,6 +76,22 @@ class DataTrainingArguments:
     task_name: Optional[str] = field(
         default=None,
         metadata={"help": "The name of the task to train on: " + ", ".join(task_to_keys.keys())},
+    )
+    interpretation_loss: Optional[float] = field(
+        default=None,
+        metadata={"help": "Weight of the interpretation loss"},
+    )
+    bce_loss: Optional[float] = field(
+        default=1.0,
+        metadata={"help": "Weight of the binary cross-entropy loss"},
+    )
+    positive_example_loss: Optional[float] = field(
+        default=1.0,
+        metadata={"help": "Weight of the positive examples loss"},
+    )
+    negative_example_loss: Optional[float] = field(
+        default=1.0,
+        metadata={"help": "Weight of the negative examples loss"},
     )
     dataset_name: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
@@ -180,7 +197,6 @@ class ModelArguments:
             "with private models)."
         },
     )
-
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -311,14 +327,22 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_args.model_name_or_path,
-        from_tf=bool(".ckpt" in model_args.model_name_or_path),
-        config=config,
-        cache_dir=model_args.cache_dir,
-        revision=model_args.model_revision,
-        use_auth_token=True if model_args.use_auth_token else None,
-    )
+
+    vocab = tokenizer.get_vocab()
+    
+    # Initialize model
+    model = BartEditDistNeuralModelConcurrent(
+        vocab, training_args.device).to(training_args.device)
+    
+    model.config.num_labels = num_labels
+    model.config.finetuning_task = data_args.task_name
+    model.config.cache_dir = model_args.cache_dir
+    model.config.revision = model_args.model_revision
+    model.config.use_auth_token = True if model_args.use_auth_token else None
+
+    logging.info(
+        "Model parameters: %dk",
+        sum([x.reshape(-1).size(0) for x in model.parameters()]) / 1000)
 
     # Preprocessing the raw_datasets
     if data_args.task_name is not None:
@@ -358,7 +382,7 @@ def main():
                 f"model labels: {list(sorted(label_name_to_id.keys()))}, dataset labels: {list(sorted(label_list))}."
                 "\nIgnoring the model labels as a result.",
             )
-    elif data_args.task_name is None and not is_regression:
+    elif not is_regression:
         label_to_id = {v: i for i, v in enumerate(label_list)}
 
     if label_to_id is not None:
@@ -375,12 +399,20 @@ def main():
         )
     max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
 
+    import pdb
+    pdb.set_trace()
+
     def preprocess_function(examples):
         # Tokenize the texts
-        args = (
-            (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
-        )
-        result = tokenizer(*args, padding=padding, max_length=max_seq_length, truncation=True)
+        if data_args.task_name not in ["string-pair-matching", "string-similarity"]:
+            args = (
+                (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
+            )
+            result = tokenizer(*args, padding=padding, max_length=max_seq_length, truncation=True)
+        else:
+            result = {}
+            result["src_sent"] = tokenizer(examples[sentence1_key], return_tensors="pt", padding=padding, max_length=max_seq_length, truncation=True)["input_ids"]
+            result["tgt_sent"] = tokenizer(examples[sentence2_key], return_tensors="pt", padding=padding, max_length=max_seq_length, truncation=True)["input_ids"]
 
         # Map labels to IDs (not necessary for GLUE tasks)
         if label_to_id is not None and "label" in examples:
@@ -421,22 +453,17 @@ def main():
             logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # Get the metric function
-    metric = evaluate.load("accuracy")
+    metric = evaluate.load("mse") if is_regression else evaluate.load("accuracy")
 
     # You can define your custom compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
     # predictions and label_ids field) and has to return a dictionary string to float.
     def compute_metrics(p: EvalPrediction):
         preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
-        preds = np.squeeze(preds) if is_regression else np.argmax(preds, axis=1)
-        if data_args.task_name is not None:
-            result = metric.compute(predictions=preds, references=p.label_ids)
-            if len(result) > 1:
-                result["combined_score"] = np.mean(list(result.values())).item()
-            return result
-        elif is_regression:
-            return {"mse": ((preds - p.label_ids) ** 2).mean().item()}
-        else:
-            return {"accuracy": (preds == p.label_ids).astype(np.float32).mean().item()}
+        preds = np.squeeze(preds) if is_regression else np.round(preds)
+        result = metric.compute(predictions=preds, references=p.label_ids)
+        if len(result) > 1:
+            result["combined_score"] = np.mean(list(result.values())).item()
+        return result
 
     # Data collator will default to DataCollatorWithPadding when the tokenizer is passed to Trainer, so we change it if
     # we already did the padding.
@@ -448,7 +475,60 @@ def main():
         data_collator = None
 
     # Initialize our Trainer
-    trainer = Trainer(
+    class CustomTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False):
+            src_sent = inputs.get("src_sent")
+            tgt_sent = inputs.get("tgt_sent")
+            labels = inputs.get("labels")
+
+            target = (labels == 1).float()
+            pos_mask = target.unsqueeze(1).unsqueeze(2)
+            neg_mask = 1 - pos_mask
+            
+            src_mask = (src_sent != model.src_pad).float()
+            tgt_mask = (tgt_sent != model.tgt_pad).float()
+            
+            action_mask = src_mask.unsqueeze(2) * tgt_mask.unsqueeze(1)
+
+            action_scores, expected_counts, logprobs, distorted_probs = model(
+                src_sent, tgt_sent)
+            
+            outputs = {
+                "probs":  logprobs.exp()
+            }
+
+            class_loss = nn.BCELoss()
+            kl_div_loss = nn.KLDivLoss(reduction='none')
+            xent_loss = nn.CrossEntropyLoss(reduction='none')
+
+            bce_loss = class_loss(logprobs.exp(), target)
+            pos_samples_loss = kl_div_loss(
+                action_scores.reshape(-1, 4),
+                expected_counts.reshape(-1, 4)).sum(1)
+            neg_samples_loss = xent_loss(
+                action_scores.reshape(-1, 4),
+                torch.full(action_scores.shape[:-1],
+                           3, dtype=torch.long).to(training_args.device).reshape(-1))
+
+            pos_loss = (
+                (action_mask * pos_mask).reshape(-1) * pos_samples_loss).mean()
+            neg_loss = (
+                (action_mask * neg_mask).reshape(-1) * neg_samples_loss).mean()
+            loss = (
+                data_args.positive_example_loss * pos_loss +
+                data_args.negative_example_loss * neg_loss +
+                data_args.bce_loss * bce_loss)
+
+            distortion_loss = 0
+            if data_args.interpretation_loss is not None:
+                distortion_loss = (
+                    (action_mask * distorted_probs).sum() / action_mask.sum())
+                loss += data_args.interpretation_loss * distortion_loss
+            
+            return (loss, outputs) if return_outputs else loss
+
+
+    trainer = CustomTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -466,6 +546,7 @@ def main():
             checkpoint = training_args.resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
+        
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         metrics = train_result.metrics
         max_train_samples = (
